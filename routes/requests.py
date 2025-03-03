@@ -146,6 +146,94 @@ async def review_request(action: schemas.ApprovalAction, current_user: models.Us
         return utils.to_request_response(db, req)
     raise HTTPException(status_code=400, detail="Request cannot be approved or rejected in its current state.")
 
+@router.post("/requests/", response_model=schemas.RequestResponse)
+async def create_new_request(
+    supervisor_id: int = Form(...),
+    subject: str = Form(...),
+    description: str = Form(...),
+    area: str = Form(...),
+    project: str = Form(...),
+    tower: str = Form(...),
+    department: str = Form(...),
+    references: str = Form(""),
+    priority: str = Form("Low"),
+    approvers: str = Form(...),
+    files: Optional[List[UploadFile]] = File(None),
+    current_user: models.User = Depends(
+        lambda token=Depends(auth.oauth2_scheme), db=Depends(get_db): auth.get_current_user(token, db)
+    ),
+    db: Session = Depends(get_db)
+):
+    """
+    Create (raise) a brand-new NFA request.
+    """
+    # 1) Validate and parse 'approvers' as a JSON list of user IDs
+    try:
+        approvers_list = json.loads(approvers)
+        # remove the supervisor from the approver list, if desired:
+        approvers_list = [u for u in approvers_list if u != supervisor_id]
+
+        # must be a list of ints
+        if not isinstance(approvers_list, list) or not all(isinstance(x, int) for x in approvers_list):
+            raise ValueError("Approvers must be a JSON list of user IDs.")
+    except:
+        raise HTTPException(status_code=400, detail="Approvers must be a JSON list of user IDs.")
+
+    # 2) Build the request data
+    current_time = datetime.utcnow()
+    new_req_data = {
+        "initiator_id": current_user.id,
+        "supervisor_id": supervisor_id,
+        "subject": subject,
+        "description": description,
+        "area": area,
+        "project": project,
+        "tower": tower,
+        "department": department,
+        "references": references,
+        "priority": priority,
+        "approvers": approvers_list,
+        "current_approver_index": 0,
+        "status": "NEW",
+        "created_at": current_time,
+        "updated_at": current_time,
+        "last_action": f"Request created at {current_time.strftime('%d-%m-%Y %H:%M')}",
+    }
+
+    # 3) Create the request in DB
+    new_req = crud.create_request(db, new_req_data)
+
+    # 4) Handle files (if any)
+    if files:
+        file_records = []
+        for file in files:
+            file.file.seek(0)
+            content = await file.read()
+            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+            new_filename = f"{new_req.id}_{timestamp}"
+            ext = ""
+            if file.filename and "." in file.filename:
+                ext = file.filename.split(".")[-1]
+            if ext:
+                new_filename += f".{ext}"
+
+            file_location = os.path.join(utils.UPLOAD_FOLDER, new_filename)
+            with open(file_location, "wb") as f:
+                f.write(content)
+
+            file_record = {
+                "file_url": f"/files/{new_filename}",
+                "file_display_name": file.filename
+            }
+            file_records.append(file_record)
+
+        new_req.files = file_records
+        crud.update_request(db, new_req)
+
+    # 5) Return the newly created request as a response
+    return utils.to_request_response(db, new_req)
+
+
 @router.get("/requests/", response_model=List[schemas.RequestResponse])
 async def list_requests(
     note_id: Optional[int] = None,
