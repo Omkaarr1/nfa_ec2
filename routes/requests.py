@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import json, os
 import schemas, crud, models, auth, utils
 from database import get_db
-
+from starlette.responses import StreamingResponse
 router = APIRouter()
 
 @router.post("/requests/{request_id}/edit", response_model=schemas.RequestResponse)
@@ -276,7 +276,13 @@ async def list_requests(
     return responses
 
 @router.get("/requests/{request_id}/pdf")
-async def download_pdf(request: Request, request_id: int, access_token: Optional[str] = Query(None), db: Session = Depends(get_db)):
+async def download_pdf(
+    request_id: int,
+    request: Request,
+    access_token: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    # 1) Extract token
     token = access_token
     if not token:
         auth_header = request.headers.get("Authorization")
@@ -284,16 +290,43 @@ async def download_pdf(request: Request, request_id: int, access_token: Optional
             token = auth_header[7:]
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
+
+    # 2) Verify current user
     current_user = auth.get_current_user(token, db)
+
+    # 3) Find the request
     req = crud.get_request_by_id(db, request_id)
     if not req:
         raise HTTPException(status_code=404, detail="NFA not found")
+
+    # 4) Only allowed if request is fully approved
     if req.status != "APPROVED":
-        raise HTTPException(status_code=400, detail="PDF can only be downloaded for approved NFAs.")
+        raise HTTPException(
+            status_code=400,
+            detail="PDF can only be downloaded for approved NFAs."
+        )
+
+    # 5) Must be initiator or have admin-type role
     if current_user.id != req.initiator_id and not (2 in current_user.role or 3 in current_user.role):
-        raise HTTPException(status_code=403, detail="Not authorized to view this PDF")
-    buffer = utils.generate_pdf(db, req)
-    return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="nfa_{req.id}.pdf"'})
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to download this PDF"
+        )
+
+    # 6) Generate or retrieve the PDF
+    pdf_buffer = utils.generate_pdf(db, req)  # expects a BytesIO
+
+    # IMPORTANT: reset pointer before streaming
+    pdf_buffer.seek(0)
+
+    # 7) Return as an attachment for better cross-platform support
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="nfa_{req.id}.pdf"'
+        },
+    )
 
 @router.post("/upload-file/{request_id}")
 async def upload_files_for_request(
