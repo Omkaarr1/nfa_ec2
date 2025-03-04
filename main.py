@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base
 import models
 from routes import auth as auth_routes, requests as request_routes, admin as admin_routes
@@ -7,6 +8,15 @@ from routes import auth as auth_routes, requests as request_routes, admin as adm
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Request Management System")
+
+# CORS Configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins, you can specify domains instead of "*"
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers
+)
 
 app.include_router(auth_routes.router)
 app.include_router(request_routes.router)

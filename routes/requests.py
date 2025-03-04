@@ -274,6 +274,41 @@ async def list_requests(
             visible.append(r)
     responses = [utils.to_request_response(db, r) for r in visible]
     return responses
+from pydantic import BaseModel
+from typing import List
+
+class RequestEditDetails(BaseModel):
+    description: str
+    tower: str
+    department: str
+    references: str
+    area: str
+    subject: str
+    priority: str
+    project: str
+    supervisor_id: int
+    approvers: List[int]
+    files: List = []  # Always returns an empty array
+
+@app.get("/requests/{request_id}", response_model=RequestEditDetails)
+async def get_request_edit_details(request_id: int, current_user: dict = Depends(get_current_user)):
+    req = get_request_by_id(request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    return RequestEditDetails(
+        description=req.get("description") or "",
+        tower=req.get("tower") or "",
+        department=req.get("department") or "",
+        references=req.get("references") or "",
+        area=req.get("area") or "",
+        subject=req.get("subject") or "",
+        priority=req.get("priority") or "",
+        project=req.get("project") or "",
+        supervisor_id=req.get("supervisor_id") or 0,
+        approvers=req.get("approvers") or [],
+        files=[]  # Always return an empty array
+    )
+
 
 @router.get("/requests/{request_id}/pdf")
 async def download_pdf(
